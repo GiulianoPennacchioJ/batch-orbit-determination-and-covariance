@@ -1,0 +1,129 @@
+%-----------------------------------------------------------------------
+% PROJECT: Batch Orbit Determination - Data Generation (Project 2)
+% VERSION: GMAT 2025a Verified - LIGHT TIME CONVERGENCE UPDATE
+% AUTHOR: Giuliano Pennacchio
+%-----------------------------------------------------------------------
+
+% --- Spacecraft Resources ---
+Create Spacecraft Sat;
+Sat.DateFormat = UTCGregorian;
+Sat.Epoch = '01 Jan 2024 12:00:00.000';
+Sat.CoordinateSystem = EarthMJ2000Eq;
+Sat.DisplayStateType = Keplerian;
+Sat.SMA = 7078.14;
+Sat.ECC = 0.001;
+Sat.INC = 98.22;
+Sat.RAAN = 0;
+Sat.AOP = 0;
+Sat.TA = 0;
+Sat.DryMass = 20;
+Sat.DragArea = 0.1;
+Sat.SRPArea = 0.1;
+Sat.Cd = 2.2;
+Sat.Cr = 1.8;
+Sat.Id = 'LEOSat';
+
+% --- Spacecraft Hardware ---
+Create Antenna SatAntenna;
+Create Transponder SatTransponder;
+SatTransponder.PrimaryAntenna = SatAntenna;
+Sat.AddHardware = {SatAntenna, SatTransponder};
+
+% --- Ground Station Hardware ---
+Create Transmitter GSTransmitter;
+Create Receiver GSReceiver;
+Create Antenna GSAntenna;
+GSTransmitter.PrimaryAntenna = GSAntenna;
+GSReceiver.PrimaryAntenna = GSAntenna;
+
+% --- Ground Stations ---
+Create GroundStation Santiago;
+Santiago.CentralBody = Earth;
+Santiago.Id = 'Santiago';
+Santiago.StateType = Spherical;
+Santiago.Latitude = -33.15;
+Santiago.Longitude = 289.33;
+Santiago.Altitude = 0.73;
+Santiago.MinimumElevationAngle = 10;
+Santiago.AddHardware = {GSTransmitter, GSReceiver, GSAntenna};
+
+Create GroundStation Dongara;
+Dongara.CentralBody = Earth;
+Dongara.Id = 'Dongara';
+Dongara.StateType = Spherical;
+Dongara.Latitude = -29.04;
+Dongara.Longitude = 114.88;
+Dongara.Altitude = 0.03;
+Dongara.MinimumElevationAngle = 10;
+Dongara.AddHardware = {GSTransmitter, GSReceiver, GSAntenna};
+
+% --- Force Model ---
+Create ForceModel FM_HighFid;
+FM_HighFid.CentralBody = Earth;
+FM_HighFid.PrimaryBodies = {Earth};
+FM_HighFid.GravityField.Earth.Degree = 20;
+FM_HighFid.GravityField.Earth.Order = 20;
+FM_HighFid.Drag.AtmosphereModel = Exponential;
+FM_HighFid.SRP = On;
+FM_HighFid.PointMasses = {Sun, Luna}; 
+FM_HighFid.ErrorControl = None; % Keep this for Simulator compatibility
+
+% --- Propagator (Optimized for Navigation Simulation) ---
+Create Propagator Prop_HighFid;
+Prop_HighFid.FM = FM_HighFid;
+Prop_HighFid.Type = RungeKutta89; % Better for light-time iterations
+Prop_HighFid.InitialStepSize = 60;
+Prop_HighFid.Accuracy = 1e-12;
+Prop_HighFid.MinStep = 0;        % REQUIRED: Allows tiny steps for light-time convergence
+Prop_HighFid.MaxStep = 60;       % REQUIRED: Limits the step to your measurement interval
+
+% --- Measurement Error Models ---
+Create ErrorModel RangeModel;
+RangeModel.Type = 'Range';
+RangeModel.NoiseSigma = 0.010; 
+
+Create ErrorModel DopplerModel;
+DopplerModel.Type = 'RangeRate';
+DopplerModel.NoiseSigma = 0.001;
+
+Santiago.ErrorModels = {RangeModel, DopplerModel};
+Dongara.ErrorModels = {RangeModel, DopplerModel};
+
+% --- Tracking Data Setup ---
+Create TrackingFileSet TrackData;
+TrackData.AddTrackingConfig = {{Santiago, Sat, Santiago}, 'Range', 'RangeRate'};
+TrackData.AddTrackingConfig = {{Dongara, Sat, Dongara}, 'Range', 'RangeRate'};
+TrackData.FileName = {'satellite_observations.gmd'};
+
+% --- Simulator Configuration ---
+Create Simulator Sim;
+Sim.AddData = {TrackData}; 
+Sim.EpochFormat = 'UTCGregorian';
+Sim.InitialEpoch = '01 Jan 2024 12:00:00.000';
+Sim.FinalEpoch = '02 Jan 2024 12:00:00.000';
+Sim.MeasurementTimeStep = 60;
+Sim.Propagator = Prop_HighFid;
+
+% --- Ground Truth Report ---
+Create ReportFile TruthReport;
+TruthReport.Filename = 'ground_truth.csv';
+TruthReport.Precision = 16;
+TruthReport.Add = {Sat.UTCGregorian, Sat.X, Sat.Y, Sat.Z, Sat.VX, Sat.VY, Sat.VZ};
+
+% --- Mission Sequence ---
+BeginMissionSequence;
+
+% 1. Generate Ground Truth
+Propagate Prop_HighFid(Sat) {Sat.ElapsedDays = 1.0};
+
+% 2. Reset Satellite for Simulator
+Sat.Epoch = '01 Jan 2024 12:00:00.000';
+Sat.SMA = 7078.14;
+Sat.ECC = 0.001;
+Sat.INC = 98.22;
+Sat.RAAN = 0;
+Sat.AOP = 0;
+Sat.TA = 0;
+
+% 3. Run Simulation
+RunSimulator Sim;

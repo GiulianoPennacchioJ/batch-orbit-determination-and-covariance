@@ -84,7 +84,7 @@ RangeModel.NoiseSigma = 0.010;
 
 Create ErrorModel DopplerModel;
 DopplerModel.Type = 'RangeRate';
-DopplerModel.NoiseSigma = 0.001;
+DopplerModel.NoiseSigma = 0.000001;
 
 Santiago.ErrorModels = {RangeModel, DopplerModel};
 Dongara.ErrorModels = {RangeModel, DopplerModel};
@@ -108,7 +108,7 @@ Sim.Propagator = Prop_HighFid;
 Create ReportFile TruthReport;
 TruthReport.Filename = 'ground_truth.csv';
 TruthReport.Precision = 16;
-TruthReport.Add = {Sat.A1ModJulian, Sat.X, Sat.Y, Sat.Z, Sat.VX, Sat.VY, Sat.VZ};
+TruthReport.Add = {Sat.A1ModJulian, Sat.UTCModJulian, Sat.X, Sat.Y, Sat.Z, Sat.VX, Sat.VY, Sat.VZ};
 
 % --- Mission Sequence ---
 BeginMissionSequence;

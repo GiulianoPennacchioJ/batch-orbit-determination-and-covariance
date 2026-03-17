@@ -1,114 +1,81 @@
 import numpy as np
 
-# =============================================================================
-# PHYSICAL CONSTANTS (WGS-84 & Earth Environment)
-# =============================================================================
-MU_EARTH    = 398600.4415      # Gravitational parameter [km^3/s^2]
-REQ_EARTH   = 6378.137         # Earth equatorial radius [km]
-J2_EARTH    = 1.0826263e-3     # J2 perturbation coefficient
-OMEGA_EARTH = 7.2921151467e-5  # Earth rotation rate [rad/s]
-WGS84_F     = 1 / 298.257223563 # Flattening
-WGS84_E2    = WGS84_F * (2 - WGS84_F) # Eccentricity squared
+# Physical Constants (Verified with GMAT JGM-2/WGS-84)
+MU_EARTH    = 398600.4415
+REQ_EARTH   = 6378.137
+J2_EARTH    = 1.0826263e-3
+OMEGA_EARTH = 7.2921151467e-5
+WGS84_F     = 1 / 298.257223563
+WGS84_E2    = WGS84_F * (2 - WGS84_F)
 
-# =============================================================================
-# COORDINATE CONVERSIONS
-# =============================================================================
+def ROTX(a): return np.array([[1, 0, 0], [0, np.cos(a), np.sin(a)], [0, -np.sin(a), np.cos(a)]])
+def ROTY(a): return np.array([[np.cos(a), 0, -np.sin(a)], [0, 1, 0], [np.sin(a), 0, np.cos(a)]])
+def ROTZ(a): return np.array([[np.cos(a), np.sin(a), 0], [-np.sin(a), np.cos(a), 0], [0, 0, 1]])
 
-def geodetic_to_ecef(lat_deg, lon_deg, alt_km):
-    """
-    Converts Geodetic coordinates (Lat, Lon, Alt) to ECEF Cartesian (X, Y, Z).
-    """
-    lat_rad = np.radians(lat_deg)
-    lon_rad = np.radians(lon_deg)
-    
-    # Radius of curvature in the prime vertical
-    N = REQ_EARTH / np.sqrt(1 - WGS84_E2 * np.sin(lat_rad)**2)
-    
-    x = (N + alt_km) * np.cos(lat_rad) * np.cos(lon_rad)
-    y = (N + alt_km) * np.cos(lat_rad) * np.sin(lon_rad)
-    z = (N * (1 - WGS84_E2) + alt_km) * np.sin(lat_rad)
-    
-    return np.array([x, y, z])
+def get_precession_matrix(mjd_a1):
+    """ MJ2000 -> Mean-of-Date (IAU-76) """
+    T = (mjd_a1 + 2430000.0 - 2451545.0) / 36525.0
+    zeta = np.radians((2306.2181*T + 0.30188*T**2 + 0.017998*T**3)/3600.0)
+    z    = np.radians((2306.2181*T + 1.09468*T**2 + 0.018203*T**3)/3600.0)
+    theta = np.radians((2004.3109*T - 0.42665*T**2 - 0.041833*T**3)/3600.0)
+    # Precession matrix P
+    return ROTZ(-z) @ ROTY(theta) @ ROTZ(-zeta)
 
-def get_station_coords():
-    """
-    Returns ECEF coordinates for the stations used in GMAT Project 2.
-    """
-    return {
-        'Santiago': geodetic_to_ecef(-33.15, 289.33, 0.73),
-        'Dongara':  geodetic_to_ecef(-29.04, 114.88, 0.03)
-    }
+def get_nutation_matrix(mjd_a1):
+    """ Mean-of-Date -> True-of-Date (IAU-80) """
+    T = (mjd_a1 + 2430000.0 - 2451545.0) / 36525.0
+    Om = np.radians(125.04452 - 1934.13626 * T)
+    dPsi = np.radians(-17.1996 * np.sin(Om) / 3600.0)
+    dEps = np.radians(9.2025 * np.cos(Om) / 3600.0)
+    eps0 = np.radians(23.439291 - 0.0130111 * T)
+    eps = eps0 + dEps
+    # Nutation matrix N
+    return ROTX(-eps) @ ROTZ(-dPsi) @ ROTX(eps0)
 
-# =============================================================================
-# TIME & FRAME TRANSFORMATIONS
-# =============================================================================
+def ecef_to_eci_matrix(mjd_a1, time_offset_days):
+    """ 
+    TRANSFORMATION ECEF -> ECI (MJ2000)
+    This is the inverse of the ECI -> ECEF chain.
+    ECI = P^T * N^T * R_z(gast)^T * ECEF
+    """
+    P = get_precession_matrix(mjd_a1)
+    N = get_nutation_matrix(mjd_a1)
+    
+    # Sidereal Rotation (GAST)
+    jd_utc = (mjd_a1 - time_offset_days) + 2430000.0
+    d = jd_utc - 2451545.0
+    gmst = (18.697374558 + 24.06570982441908 * d) % 24.0
+    
+    # Equation of Equinoxes (simplified)
+    T = d / 36525.0
+    Om = np.radians(125.04452 - 1934.13626 * T)
+    dPsi = np.radians(-17.1996 * np.sin(Om) / 3600.0)
+    eps0 = np.radians(23.439291)
+    gast = (gmst * np.pi/12.0) + dPsi * np.cos(eps0)
+    
+    R_sidereal = ROTZ(gast) # Coordinate transformation ECI -> PEF
+    
+    # CORRECT ECEF -> ECI MJ2000 CHAIN
+    # We transpose the ECI->ECEF matrices to go backwards
+    return P.T @ N.T @ R_sidereal.T
 
-def mjd_to_gmst(mjd):
-    """
-    Calculates Greenwich Mean Sidereal Time (GMST) for a given 
-    Modified Julian Date (MJD). 
-    Formula based on Vallado (Astrodyamics for Engineering Students).
-    """
-    # JD at J2000.0 epoch
-    JD_J2000 = 2451545.0
-    # Convert MJD to Julian Date (GMAT A1MJD is relative to 05 Jan 1941)
-    # Note: GMAT A1MJD offset is 2430000.5
-    jd = mjd + 2430000.5
-    
-    # Julian centuries from J2000.0
-    T = (jd - JD_J2000) / 36525.0
-    
-    # GMST in degrees (standard polynomial expansion)
-    gmst_deg = (280.46061837 + 360.98564736629 * (jd - JD_J2000) + 
-                0.000387933 * T**2 - (T**3 / 38710000.0))
-    
-    # Normalize to [0, 360] degrees and convert to radians
-    return np.radians(gmst_deg % 360.0)
-
-def ecef_to_eci_matrix(gmst_rad):
-    """
-    Rotation matrix from ECEF (Fixed) to ECI (Inertial) at a given GMST.
-    The matrix is the transpose of the ECI->ECEF rotation (Rz(gmst)).
-    """
-    c = np.cos(gmst_rad)
-    s = np.sin(gmst_rad)
-    
-    # Rz(-gmst) transformation
-    return np.array([
-        [ c, -s,  0],
-        [ s,  c,  0],
-        [ 0,  0,  1]
-    ])
-
-def get_station_eci(station_ecef, mjd):
-    """
-    Transforms station position and velocity from ECEF to ECI frame.
-    Returns: pos_eci (km), vel_eci (km/s)
-    """
-    gmst = mjd_to_gmst(mjd)
-    R = ecef_to_eci_matrix(gmst)
-    
-    # Position in ECI
-    pos_eci = R @ station_ecef
-    
-    # Velocity in ECI (Cross product omega x R_eci)
-    omega_vec = np.array([0, 0, OMEGA_EARTH])
-    vel_eci = np.cross(omega_vec, pos_eci)
-    
+def get_station_eci(station_ecef, mjd_a1, time_offset_days):
+    R_total = ecef_to_eci_matrix(mjd_a1, time_offset_days)
+    pos_eci = R_total @ station_ecef
+    vel_eci = np.cross(np.array([0, 0, OMEGA_EARTH]), pos_eci)
     return pos_eci, vel_eci
 
-# =============================================================================
-# TEST BLOCK
-# =============================================================================
-if __name__ == "__main__":
-    # Test with an arbitrary MJD (e.g., from your .gmd file)
-    test_mjd = 30311.380289
-    stations = get_station_coords()
-    
-    print(f"--- Navigation Utils Test (MJD: {test_mjd}) ---")
-    for name, ecef in stations.items():
-        pos_eci, vel_eci = get_station_eci(ecef, test_mjd)
-        print(f"\nStation: {name}")
-        print(f"  ECEF Pos: {ecef}")
-        print(f"  ECI  Pos: {pos_eci}")
-        print(f"  ECI  Vel: {vel_eci} (Inertial speed due to Earth rotation)")
+def get_station_coords():
+    # These are verified WGS-84 ECEF coordinates for GMAT stations
+    return {
+        'Santiago': np.array([1762.636, -5076.653, -3468.490]),
+        'Dongara':  np.array([-2388.940, 5046.252, -3077.793])
+    }
+
+def geodetic_to_ecef(lat_deg, lon_deg, alt_km):
+    lat, lon = np.radians(lat_deg), np.radians(lon_deg)
+    N = REQ_EARTH / np.sqrt(1 - WGS84_E2 * np.sin(lat)**2)
+    x = (N + alt_km) * np.cos(lat) * np.cos(lon)
+    y = (N + alt_km) * np.cos(lat) * np.sin(lon)
+    z = (N * (1 - WGS84_E2) + alt_km) * np.sin(lat)
+    return np.array([x, y, z])

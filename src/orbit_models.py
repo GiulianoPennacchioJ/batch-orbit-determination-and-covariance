@@ -119,11 +119,17 @@ def propagate_state_and_stm(state_0, stm_0, dt):
     """
     # 1. Propagate the State using RK4
     state_next = rk4_step(orbit_dynamics, 0, state_0, dt)
+
+    # Calculate the mid-point state for better accuracy in STM propagation 
+    # It is the average of the initial and final states, which is a common technique in numerical integration of variational equations.
+    state_mid = (state_0 + state_next) / 2.0
     
-    # 2. Propagate the STM (First-order approximation: Phi_new = Phi + A*Phi*dt)
-    A = get_dynamics_jacobian(state_0)
-    stm_dot = A @ stm_0
+    # 2. Propagate the STM using the Jacobian at the mid-point state
+    # dPhi/dt = A_mid * Phi_0
+    A_mid = get_dynamics_jacobian(state_mid)
+    stm_dot = A_mid @ stm_0
     stm_next = stm_0 + stm_dot * dt
+
     
     return state_next, stm_next
 

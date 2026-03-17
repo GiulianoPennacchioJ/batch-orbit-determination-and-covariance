@@ -108,7 +108,7 @@ Sim.Propagator = Prop_HighFid;
 Create ReportFile TruthReport;
 TruthReport.Filename = 'ground_truth.csv';
 TruthReport.Precision = 16;
-TruthReport.Add = {Sat.UTCGregorian, Sat.X, Sat.Y, Sat.Z, Sat.VX, Sat.VY, Sat.VZ};
+TruthReport.Add = {Sat.A1ModJulian, Sat.X, Sat.Y, Sat.Z, Sat.VX, Sat.VY, Sat.VZ};
 
 % --- Mission Sequence ---
 BeginMissionSequence;

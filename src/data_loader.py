@@ -81,3 +81,37 @@ def load_ground_truth(filepath):
         print("Check if your GMAT ReportFile includes these parameters.")
 
     return df
+
+def get_synchronized_truth(truth_df, first_obs_mjd):
+    """
+    Finds the truth state in the CSV that matches the first observation epoch.
+    
+    Inputs:
+        truth_df: DataFrame from load_ground_truth
+        first_obs_mjd: The MJD of the first observation in the .gmd file
+        
+    Returns:
+        x_true: 6x1 numpy array [x, y, z, vx, vy, vz]
+        matched_mjd: The exact MJD found in the truth file
+    """
+    # Find the row where the A1ModJulian is closest to our first observation
+    # We use 'A1ModJulian' (or 'ModJulian' depending on your column cleaning)
+    time_col = 'A1ModJulian' if 'A1ModJulian' in truth_df.columns else 'ModJulian'
+    
+    # Calculate absolute difference between each truth row and the target MJD
+    diff = np.abs(truth_df[time_col] - first_obs_mjd)
+    idx_match = diff.idxmin()
+    
+    matched_row = truth_df.iloc[idx_match]
+    matched_mjd = matched_row[time_col]
+    
+    x_true = np.array([
+        matched_row['X'], matched_row['Y'], matched_row['Z'],
+        matched_row['VX'], matched_row['VY'], matched_row['VZ']
+    ])
+    
+    print(f"Sincronizzazione completata!")
+    print(f"  Target MJD:  {first_obs_mjd:.10f}")
+    print(f"  Matched MJD: {matched_mjd:.10f} (Diff: {diff.min()*86400:.4f} sec)")
+    
+    return x_true, matched_mjd

@@ -18,7 +18,6 @@ def get_precession_matrix(mjd_a1):
     zeta = np.radians((2306.2181*T + 0.30188*T**2 + 0.017998*T**3)/3600.0)
     z    = np.radians((2306.2181*T + 1.09468*T**2 + 0.018203*T**3)/3600.0)
     theta = np.radians((2004.3109*T - 0.42665*T**2 - 0.041833*T**3)/3600.0)
-    # Precession matrix P
     return ROTZ(-z) @ ROTY(theta) @ ROTZ(-zeta)
 
 def get_nutation_matrix(mjd_a1):
@@ -29,19 +28,17 @@ def get_nutation_matrix(mjd_a1):
     dEps = np.radians(9.2025 * np.cos(Om) / 3600.0)
     eps0 = np.radians(23.439291 - 0.0130111 * T)
     eps = eps0 + dEps
-    # Nutation matrix N
     return ROTX(-eps) @ ROTZ(-dPsi) @ ROTX(eps0)
 
 def ecef_to_eci_matrix(mjd_a1, time_offset_days):
     """ 
-    TRANSFORMATION ECEF -> ECI (MJ2000)
-    This is the inverse of the ECI -> ECEF chain.
+    TRANSFORMATION ECEF -> ECI (MJ2000Eq)
     ECI = P^T * N^T * R_z(gast)^T * ECEF
     """
     P = get_precession_matrix(mjd_a1)
     N = get_nutation_matrix(mjd_a1)
     
-    # Sidereal Rotation (GAST)
+    # GMST from UTC Julian Date
     jd_utc = (mjd_a1 - time_offset_days) + 2430000.0
     d = jd_utc - 2451545.0
     gmst = (18.697374558 + 24.06570982441908 * d) % 24.0
@@ -53,10 +50,7 @@ def ecef_to_eci_matrix(mjd_a1, time_offset_days):
     eps0 = np.radians(23.439291)
     gast = (gmst * np.pi/12.0) + dPsi * np.cos(eps0)
     
-    R_sidereal = ROTZ(gast) # Coordinate transformation ECI -> PEF
-    
-    # CORRECT ECEF -> ECI MJ2000 CHAIN
-    # We transpose the ECI->ECEF matrices to go backwards
+    R_sidereal = ROTZ(gast)
     return P.T @ N.T @ R_sidereal.T
 
 def get_station_eci(station_ecef, mjd_a1, time_offset_days):
@@ -66,10 +60,20 @@ def get_station_eci(station_ecef, mjd_a1, time_offset_days):
     return pos_eci, vel_eci
 
 def get_station_coords():
-    # These are verified WGS-84 ECEF coordinates for GMAT stations
+    """
+    WGS-84 ECEF coordinates recomputed from GMAT script geodetic params.
+
+    FIX (BUG #1): Previous hardcoded values had errors up to 41 km (Dongara X)
+    and 32 km (Santiago Y) relative to the GMAT geodetic definition.
+    All values now recomputed directly from GMAT script parameters:
+      Dongara:  lat=-29.04, lon=114.88, alt=0.03 km
+      Santiago: lat=-33.15, lon=289.33, alt=0.73 km
+    """
+    dongara  = geodetic_to_ecef(-29.04,  114.88, 0.03)
+    santiago = geodetic_to_ecef(-33.15,  289.33, 0.73)
     return {
-        'Santiago': np.array([1762.636, -5076.653, -3468.490]),
-        'Dongara':  np.array([-2388.940, 5046.252, -3077.793])
+        'Santiago': santiago,
+        'Dongara':  dongara
     }
 
 def geodetic_to_ecef(lat_deg, lon_deg, alt_km):

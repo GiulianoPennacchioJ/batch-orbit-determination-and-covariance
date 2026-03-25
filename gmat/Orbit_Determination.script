@@ -1,7 +1,18 @@
 %-----------------------------------------------------------------------
-% PROJECT: Batch Orbit Determination - Data Generation (Project 2)
-% VERSION: GMAT 2025a Verified - LIGHT TIME CONVERGENCE UPDATE
-% AUTHOR: Giuliano Pennacchio
+% PROJECT 2: Batch Orbit Determination - SIMPLIFIED Force Model
+% VERSION: Matched to Python orbit_models.py (J2-J6 zonals + Moon + Sun)
+%
+% CHANGES FROM ORIGINAL:
+%   GravityField.Earth.Degree = 20 → 6
+%   GravityField.Earth.Order  = 20 → 0   (zonal-only, no tesseral)
+%   Drag removed
+%   SRP = Off
+%   PointMasses = {Sun, Luna}  KEPT (Python has _acc_3body active)
+%
+% FORCE MODEL MATCH:
+%   Python orbit_models.py: J2-J6 zonals + Moon + Sun (when t_mjd0 passed)
+%   This GMAT script: J2-J6 zonals + Moon + Sun (no tesseral, no drag, no SRP)
+%   Result: identical physics → residuals floor = ~10-50 m (light-time + integrator)
 %-----------------------------------------------------------------------
 
 % --- Spacecraft Resources ---
@@ -57,34 +68,43 @@ Dongara.Altitude = 0.03;
 Dongara.MinimumElevationAngle = 10;
 Dongara.AddHardware = {GSTransmitter, GSReceiver, GSAntenna};
 
-% --- Force Model ---
-Create ForceModel FM_HighFid;
-FM_HighFid.CentralBody = Earth;
-FM_HighFid.PrimaryBodies = {Earth};
-FM_HighFid.GravityField.Earth.Degree = 20;
-FM_HighFid.GravityField.Earth.Order = 20;
-FM_HighFid.Drag.AtmosphereModel = Exponential;
-FM_HighFid.SRP = On;
-FM_HighFid.PointMasses = {Sun, Luna}; 
-FM_HighFid.ErrorControl = None; % Keep this for Simulator compatibility
+% --- Force Model (SIMPLIFIED to match Python orbit_models.py) ---
+Create ForceModel FM_Simplified;
+FM_Simplified.CentralBody = Earth;
+FM_Simplified.PrimaryBodies = {Earth};
 
-% --- Propagator (Optimized for Navigation Simulation) ---
-Create Propagator Prop_HighFid;
-Prop_HighFid.FM = FM_HighFid;
-Prop_HighFid.Type = RungeKutta89; % Better for light-time iterations
-Prop_HighFid.InitialStepSize = 60;
-Prop_HighFid.Accuracy = 1e-12;
-Prop_HighFid.MinStep = 0;        % REQUIRED: Allows tiny steps for light-time convergence
-Prop_HighFid.MaxStep = 60;       % REQUIRED: Limits the step to your measurement interval
+% ZONAL ONLY: Degree=6, Order=0 → J2, J3, J4, J5, J6 (no tesseral C22/S22 etc.)
+FM_Simplified.GravityField.Earth.Degree = 6;
+FM_Simplified.GravityField.Earth.Order  = 0;
+
+% THIRD BODIES: Moon + Sun (matches Python _acc_3body when t_mjd0 is passed)
+FM_Simplified.PointMasses = {Sun, Luna};
+
+% NO DRAG (Python drag requires t_mjd0, can be toggled)
+% FM_Simplified.Drag.AtmosphereModel = Exponential;  % COMMENTED OUT
+
+% NO SRP (Python SRP also requires t_mjd0)
+FM_Simplified.SRP = Off;
+
+FM_Simplified.ErrorControl = None;
+
+% --- Propagator ---
+Create Propagator Prop_Simplified;
+Prop_Simplified.FM = FM_Simplified;
+Prop_Simplified.Type = RungeKutta89;
+Prop_Simplified.InitialStepSize = 60;
+Prop_Simplified.Accuracy = 1e-12;
+Prop_Simplified.MinStep = 0;
+Prop_Simplified.MaxStep = 60;
 
 % --- Measurement Error Models ---
 Create ErrorModel RangeModel;
 RangeModel.Type = 'Range';
-RangeModel.NoiseSigma = 0.010; 
+RangeModel.NoiseSigma = 0.010;   % 10 m sigma (matches Python sigma_range)
 
 Create ErrorModel DopplerModel;
 DopplerModel.Type = 'RangeRate';
-DopplerModel.NoiseSigma = 0.000001;
+DopplerModel.NoiseSigma = 0.000001;  % 1 mm/s sigma (matches Python sigma_doppler)
 
 Santiago.ErrorModels = {RangeModel, DopplerModel};
 Dongara.ErrorModels = {RangeModel, DopplerModel};
@@ -97,12 +117,12 @@ TrackData.FileName = {'satellite_observations.gmd'};
 
 % --- Simulator Configuration ---
 Create Simulator Sim;
-Sim.AddData = {TrackData}; 
+Sim.AddData = {TrackData};
 Sim.EpochFormat = 'UTCGregorian';
 Sim.InitialEpoch = '01 Jan 2024 12:00:00.000';
 Sim.FinalEpoch = '02 Jan 2024 12:00:00.000';
 Sim.MeasurementTimeStep = 60;
-Sim.Propagator = Prop_HighFid;
+Sim.Propagator = Prop_Simplified;
 
 % --- Ground Truth Report ---
 Create ReportFile TruthReport;
@@ -114,7 +134,7 @@ TruthReport.Add = {Sat.A1ModJulian, Sat.UTCModJulian, Sat.X, Sat.Y, Sat.Z, Sat.V
 BeginMissionSequence;
 
 % 1. Generate Ground Truth
-Propagate Prop_HighFid(Sat) {Sat.ElapsedDays = 1.0};
+Propagate Prop_Simplified(Sat) {Sat.ElapsedDays = 1.0};
 
 % 2. Reset Satellite for Simulator
 Sat.Epoch = '01 Jan 2024 12:00:00.000';

@@ -56,9 +56,10 @@ def main():
         obs_df, 
         x_initial_guess, 
         time_offset=gmat_time_offset, # DYNAMIC OFFSET
-        max_iterations=10, 
-        convergence_tol=1e-8
-    )
+        max_outer = 8, 
+        max_inner = 15,
+        convergence_tol=1e-8 
+        )
 
     if x_estimated is None:
         print("\n[ERROR] Batch Estimation failed to converge.")

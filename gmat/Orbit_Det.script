@@ -1,0 +1,90 @@
+%-----------------------------------------------------------------------
+% PROJECT: Batch Orbit Determination - Multi-Station Data Simulation
+% AUTHOR: Giuliano Pennacchio
+% DESCRIPTION: Simulates Range and Doppler measurements with J2 gravity
+%              from two ground stations to ensure observability.
+%-----------------------------------------------------------------------
+
+% --- Resources: Spacecraft ---
+Create Spacecraft Sat;
+Sat.DateFormat = UTCGregorian;
+Sat.Epoch = '01 Jan 2024 12:00:00.000'; % 
+Sat.CoordinateSystem = EarthMJ2000Eq;
+Sat.DisplayStateType = Keplerian;
+Sat.SMA = 7078.14; % 
+Sat.ECC = 0.001;   % 
+Sat.INC = 98.22;   % 
+Sat.RAAN = 0;
+Sat.AOP = 0;
+Sat.TA = 0;
+
+% --- Hardware Configuration (Required for Measurement Simulation) ---
+Create Transmitter SatTransmitter;
+Create Antenna SatAntenna;
+Create Transponder SatTransponder;
+SatTransponder.PrimaryAntenna = SatAntenna;
+Sat.AddHardware = {SatTransponder, SatAntenna};
+
+% --- Ground Station 1: Kourou (French Guiana) ---
+Create GroundStation GS_Kourou;
+GS_Kourou.CentralBody = Earth;
+GS_Kourou.StateType = Spherical;
+GS_Kourou.HorizonAngle = 10; 
+GS_Kourou.Latitude = 5.23;
+GS_Kourou.Longitude = -52.76;
+GS_Kourou.Altitude = 0;
+
+% --- Ground Station 2: Hartebeesthoek (South Africa) ---
+% Added to improve geometry and observability
+Create GroundStation GS_SouthAfrica;
+GS_SouthAfrica.CentralBody = Earth;
+GS_SouthAfrica.StateType = Spherical;
+GS_SouthAfrica.HorizonAngle = 10;
+GS_SouthAfrica.Latitude = -25.88;
+GS_SouthAfrica.Longitude = 27.70;
+GS_SouthAfrica.Altitude = 1.55;
+
+% --- Force Model: Focused on J2 Perturbations ---
+Create ForceModel FM_J2;
+FM_J2.CentralBody = Earth;
+FM_J2.PrimaryBodies = {Earth};
+FM_J2.GravityField.Earth.Degree = 2; % 
+FM_J2.GravityField.Earth.Order = 0;  % 
+
+% --- Propagator ---
+Create Propagator Prop;
+Prop.FM = FM_J2;
+Prop.Type = RungeKutta89; % 
+Prop.InitialStepSize = 60;
+
+% --- Error Models: Gaussian Noise for Batch Least Squares ---
+Create ErrorModel RangeNoise;
+RangeNoise.Type = 'Range';
+RangeNoise.NoiseSigma = 0.010; % 10 meters noise 
+
+Create ErrorModel DopplerNoise;
+DopplerNoise.Type = 'RangeRate';
+DopplerNoise.NoiseSigma = 0.001; % 1 mm/s noise 
+
+GS_Kourou.ErrorModels = {RangeNoise, DopplerNoise};
+GS_SouthAfrica.ErrorModels = {RangeNoise, DopplerNoise};
+
+% --- Measurement Setup ---
+Create TrackingFileSet ObsData;
+ObsData.AddTrackingConfig = {{GS_Kourou, Sat}, 'Range', 'RangeRate'};
+ObsData.AddTrackingConfig = {{GS_SouthAfrica, Sat}, 'Range', 'RangeRate'};
+ObsData.FileName = {'OrbitObs.gmd'}; % Output file for Python processing 
+
+Create MeasurementSimulator Sim;
+Sim.PlotResults = On;
+Sim.MeasurementFiles = {'OrbitObs.gmd'};
+Sim.AddData = {ObsData};
+
+% --- Mission Sequence ---
+BeginMissionSequence;
+
+% Simulate 2 days of tracking to ensure multiple passes 
+Propagate Prop(Sat) {Sat.ElapsedDays = 2.0};
+
+% Generate the .gmd file with simulated observations
+RunSimulator Sim;

@@ -32,7 +32,7 @@ def compute_range_and_doppler(state_eci, station_ecef, mjd, time_offset):
     # To match GMAT's .gmd data, we sum the up-link and down-link
     range_2way = range_1way * 2.0
     doppler_2way = doppler_1way * 2.0
-    
+
     return range_2way, doppler_2way
 
 # =============================================================================

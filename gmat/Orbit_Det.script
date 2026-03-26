@@ -1,93 +1,113 @@
 %-----------------------------------------------------------------------
-% PROJECT: Batch Orbit Determination - Data Generation (Project 2)
+% PROJECT: Batch Orbit Determination - Project 2
 % AUTHOR: Giuliano Pennacchio
-% DESCRIPTION: GMAT Script using 'Simulator' object with J2 perturbations.
-%              One-way Range and RangeRate configuration.
 %-----------------------------------------------------------------------
 
-% --- Hardware Resources ---
-Create Transmitter KourouTransmitter SouthAfricaTransmitter SatTransmitter;
-Create Receiver KourouReceiver SouthAfricaReceiver SatReceiver;
-Create Antenna KourouAntenna SouthAfricaAntenna SatAntenna;
-Create Transponder SatTransponder;
-
-SatTransponder.PrimaryAntenna = SatAntenna;
-
-% --- Spacecraft Configuration ---
+% --- 1. Spacecraft ---
 Create Spacecraft Sat;
 Sat.DateFormat = UTCGregorian;
 Sat.Epoch = '01 Jan 2024 12:00:00.000';
 Sat.CoordinateSystem = EarthMJ2000Eq;
 Sat.DisplayStateType = Keplerian;
 Sat.SMA = 7078.14;
-Sat.ECC = 0.001;  
-Sat.INC = 98.22;  
-Sat.RAAN = 0;
-Sat.AOP = 0;
-Sat.TA = 0;
-Sat.AddHardware = {SatTransponder, SatAntenna}; 
+Sat.ECC = 0.001;
+Sat.INC = 98.22;
+Sat.Id = 'LEOSat';
 
-% --- Ground Station 1: Kourou ---
+% --- 2. Hardware (SC) ---
+Create Antenna SatAntenna;
+Create Receiver SatReceiver;
+SatReceiver.PrimaryAntenna = SatAntenna;
+Sat.AddHardware = {SatAntenna, SatReceiver};
+
+% --- 3. Hardware (GS) ---
+Create Transmitter GSTransmitter;
+Create Receiver GSReceiver;
+Create Antenna GSAntenna;
+GSTransmitter.PrimaryAntenna = GSAntenna;
+GSReceiver.PrimaryAntenna = GSAntenna;
+
+% --- 4. Ground Stations ---
 Create GroundStation GS_Kourou;
 GS_Kourou.CentralBody = Earth;
+GS_Kourou.Id = 'Kourou';
 GS_Kourou.StateType = Spherical;
 GS_Kourou.Latitude = 5.23;
 GS_Kourou.Longitude = -52.76;
 GS_Kourou.Altitude = 0;
-GS_Kourou.AddHardware = {KourouTransmitter, KourouReceiver, KourouAntenna};
-GS_Kourou.MinimumElevationAngle = 10; 
+GS_Kourou.MinimumElevationAngle = 10;
+GS_Kourou.AddHardware = {GSTransmitter, GSReceiver, GSAntenna};
 
-% --- Ground Station 2: South Africa ---
 Create GroundStation GS_SouthAfrica;
 GS_SouthAfrica.CentralBody = Earth;
+GS_SouthAfrica.Id = 'SouthAfrica';
 GS_SouthAfrica.StateType = Spherical;
 GS_SouthAfrica.Latitude = -25.88;
 GS_SouthAfrica.Longitude = 27.70;
 GS_SouthAfrica.Altitude = 1.55;
-GS_SouthAfrica.AddHardware = {SouthAfricaTransmitter, SouthAfricaReceiver, SouthAfricaAntenna};
 GS_SouthAfrica.MinimumElevationAngle = 10;
+GS_SouthAfrica.AddHardware = {GSTransmitter, GSReceiver, GSAntenna};
 
-% --- Force Model: J2 Gravity ---
+% --- 5. Force Model & Propagator ---
 Create ForceModel FM_J2;
 FM_J2.PrimaryBodies = {Earth};
 FM_J2.GravityField.Earth.Degree = 2;
-FM_J2.GravityField.Earth.Order = 0; 
+FM_J2.GravityField.Earth.Order = 0;
+FM_J2.ErrorControl = None; 
 
-% --- Propagator ---
 Create Propagator Prop;
 Prop.FM = FM_J2;
 Prop.Type = RungeKutta89;
+Prop.InitialStepSize = 60;
+Prop.MinStep = 0;        
+Prop.MaxStep = 60;       
 
-% --- Error Models ---
-Create ErrorModel RangeNoise DopplerNoise;
-RangeNoise.Type = 'Range';
-RangeNoise.NoiseSigma = 0.010;  
-DopplerNoise.Type = 'RangeRate';
-DopplerNoise.NoiseSigma = 0.001; 
+% --- 6. Error Models ---
+Create ErrorModel RangeModel;
+RangeModel.Type = 'Range';
+RangeModel.NoiseSigma = 0.010; 
 
-GS_Kourou.ErrorModels = {RangeNoise, DopplerNoise};
-GS_SouthAfrica.ErrorModels = {RangeNoise, DopplerNoise};
+Create ErrorModel DopplerModel;
+DopplerModel.Type = 'RangeRate';
+DopplerModel.NoiseSigma = 0.001;
 
-% --- Tracking Data Setup ---
-Create TrackingFileSet ObsData;
-% One-way tracking config: {Station, Satellite}
-ObsData.AddTrackingConfig = {{GS_Kourou, Sat}, 'Range', 'RangeRate'};
-ObsData.AddTrackingConfig = {{GS_SouthAfrica, Sat}, 'Range', 'RangeRate'};
-ObsData.FileName = {'OrbitObs.gmd'};
+GS_Kourou.ErrorModels = {RangeModel, DopplerModel};
+GS_SouthAfrica.ErrorModels = {RangeModel, DopplerModel};
 
-% --- Simulator Setup (Corrected to 'Simulator') ---
+% --- 7. Tracking Setup ---
+Create TrackingFileSet TrackData;
+TrackData.AddTrackingConfig = {{GS_Kourou, Sat}, 'Range', 'RangeRate'};
+TrackData.AddTrackingConfig = {{GS_SouthAfrica, Sat}, 'Range', 'RangeRate'};
+TrackData.FileName = {'OrbitObs.gmd'};
+
+% --- 8. Simulator ---
 Create Simulator Sim;
-Sim.AddData = {ObsData};
+Sim.AddData = {TrackData}; 
 Sim.EpochFormat = 'UTCGregorian';
 Sim.InitialEpoch = '01 Jan 2024 12:00:00.000';
 Sim.FinalEpoch = '02 Jan 2024 12:00:00.000';
 Sim.MeasurementTimeStep = 60;
 Sim.Propagator = Prop;
 
-% --- Mission Sequence ---
+% --- 9. Ground Truth Report ---
+Create ReportFile TruthReport;
+TruthReport.Filename = 'GroundTruth.csv';
+TruthReport.Precision = 16;
+TruthReport.Add = {Sat.A1ModJulian, Sat.UTCModJulian, Sat.X, Sat.Y, Sat.Z, Sat.VX, Sat.VY, Sat.VZ};
+
+% --- 10. Mission Sequence ---
 BeginMissionSequence;
 
-% Reset and Run
-Propagate Prop(Sat) {Sat.ElapsedDays = 2.0};
-Sat.Epoch = '01 Jan 2024 12:00:00.000'; % Reset to start epoch for simulator
+% Generate Ground Truth
+Propagate Prop(Sat) {Sat.ElapsedDays = 1.0};
+
+% Reset 
+Sat.Epoch = '01 Jan 2024 12:00:00.000';
+Sat.SMA = 7078.14;
+Sat.ECC = 0.001;
+Sat.INC = 98.22;
+Sat.RAAN = 0;
+Sat.AOP = 0;
+Sat.TA = 0;
+
 RunSimulator Sim;

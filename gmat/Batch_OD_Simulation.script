@@ -1,175 +1,143 @@
-%=========================================================================
+% =========================================================================
 % PROJECT 2: Batch Orbit Determination and Covariance Analysis
 % AUTHOR   : Giuliano Pennacchio
 % VERSION  : GMAT R2025a
 %
-% DESCRIPTION
-% -----------
-% This script is the data-generation stage of a two-stage pipeline:
+% STAGE 1 of the integrated GMAT + Python pipeline.
+% Generates two output files consumed by the Python BLS estimator:
 %
-%   STAGE 1 (this script) — GMAT
-%     Propagates the "true" spacecraft trajectory and produces:
-%       (a) Batch_OD_GroundTruth.csv  — Cartesian ECI ephemeris at 60 s
-%       (b) Batch_OD_Tracking.gmd    — Simulated radar observations
+%   Batch_OD_Tracking.gmd
+%       Simulated radar observations (range and range-rate, with noise).
+%       Format: TAIMJD  MeasType  GS_ID  SC_ID  Value
+%       MeasType: Range [km] or RangeRate [km/s]
+%       GS_ID:    1001 = Kiruna, 1002 = Svalbard
+%       SC_ID:    2001 = Sat
 %
-%   STAGE 2 — Python
-%     Reads both GMAT outputs and runs the BLS estimator:
-%       00_parse_gmd.py              — parses .gmd → observations.csv
-%       01_batch_least_squares.py    — BLS with STM
-%       02_residuals_analysis.py     — pre/post-fit residual plots
-%       03_covariance_analysis.py    — error ellipsoid, correlation matrix
-%
-% ORBIT
-% -----
-%   SSO-like LEO, a = 7078.14 km, e = 0.001, i = 98.22 deg
-%   Epoch: 01 Jan 2024 12:00:00.000 UTC
-%   Force model: J2 only (consistent with Python estimator assumption)
-%
-% GROUND STATIONS
-% ---------------
-%   GS1 — Kiruna,   Sweden  (67.86 N, 20.23 E)  ESA/SSC polar station
-%   GS2 — Svalbard, Norway  (78.23 N, 15.40 E)  SvalSat, high-latitude
-%   Minimum elevation mask: 5 deg
-%
-% MEASUREMENT TYPES
-% -----------------
-%   Range      — two-way range [km],  sigma = 0.010 km (10 m)
-%   RangeRate  — two-way range-rate [km/s],  sigma = 0.000001 km/s (1 mm/s)
-%
-% GMD FILE FORMAT
-% ---------------
-%   Each data record contains space-delimited fields:
-%     Col 1: TAIMJD        — TAI Modified Julian Date (epoch of receive)
-%     Col 2: Range         — measurement type keyword
-%     Col 3: GS_ID         — ground station integer ID
-%     Col 4: SC_ID         — spacecraft integer ID
-%     Col 5: value         — observable (km for Range, km/s for RangeRate)
-%
-%   Example records:
-%     27392.5010416667  Range      1001  2001  3521.872345678
-%     27392.5010416667  RangeRate  1001  2001  -4.512345678
-%
-% OUTPUT FILES (written to GMAT output directory)
-% -----------------------------------------------
-%   Batch_OD_Tracking.gmd       — .gmd observations (parsed by Python)
-%   Batch_OD_GroundTruth.csv    — truth ephemeris (validation reference)
+%   Batch_OD_GroundTruth.csv
+%       True Cartesian ECI state at 60-s cadence over 3 days.
+%       Columns: A1ModJulian X Y Z VX VY VZ SMA ECC INC RAAN AOP TA
 %
 % HOW TO RUN
-% ----------
-%   Open in GMAT R2025a, press Run(or F5).
-%   Output files appear in <GMAT_ROOT>/output/.
-%   Then run the Python pipeline from the python/ directory.
-%=========================================================================
+%   Open in GMAT R2025a and press Run (F5).
+%   Output files appear in the GMAT output directory.
+%   Then run the Python pipeline (python/00_parse_gmd.py etc.)
+%
+% ORBIT
+%   SSO-like LEO: a=7078.14 km, e=0.001, i=98.22 deg, epoch 01 Jan 2024
+%
+% GROUND STATIONS
+%   Kiruna   ID 1001: 67.86 N, 20.23 E, alt 0.04 km (ESA/SSC, Sweden)
+%   Svalbard ID 1002: 78.23 N, 15.40 E, alt 0.50 km (SvalSat, Norway)
+%
+% NOISE MODEL
+%   Range:     sigma = 0.010 km (10 m),  S-band radar
+%   RangeRate: sigma = 0.000001 km/s (1 mm/s), coherent Doppler
+%
+% FORCE MODEL: J2 only (degree=2, order=0)
+%   Consistent with the Python BLS estimator assumption.
+% =========================================================================
 
 
-%=========================================================================
-% SECTION 1 — SPACECRAFT
-%=========================================================================
-% Orbit consistent with Project 1 (High-Fidelity Orbit Propagation).
-% Keplerian elements at the reference epoch converted to Cartesian by GMAT.
+% =========================================================================
+% SECTION 1: SPACECRAFT
+% =========================================================================
 
 Create Spacecraft Sat;
 Sat.DateFormat       = UTCGregorian;
 Sat.Epoch            = '01 Jan 2024 12:00:00.000';
 Sat.CoordinateSystem = EarthMJ2000Eq;
 Sat.DisplayStateType = Keplerian;
-Sat.SMA              = 7078.14;   % km  — semi-major axis (altitude ~700 km)
-Sat.ECC              = 0.001;     % —   — near-circular
-Sat.INC              = 98.22;     % deg — SSO-like inclination
-Sat.RAAN             = 0.0;       % deg
-Sat.AOP              = 0.0;       % deg
-Sat.TA               = 0.0;       % deg — true anomaly at epoch
-Sat.DryMass          = 20.0;      % kg
-Sat.DragArea         = 0.1;       % m^2
-Sat.SRPArea          = 0.1;       % m^2
+Sat.SMA              = 7078.14;
+Sat.ECC              = 0.001;
+Sat.INC              = 98.22;
+Sat.RAAN             = 0.0;
+Sat.AOP              = 0.0;
+Sat.TA               = 0.0;
+Sat.DryMass          = 20.0;
+Sat.DragArea         = 0.1;
+Sat.SRPArea          = 0.1;
 Sat.Cd               = 2.2;
 Sat.Cr               = 1.8;
-
-% Spacecraft ID used in GMD file (Col 4 of each record)
 Sat.Id               = '2001';
 
 
-%=========================================================================
-% SECTION 2 — SPACECRAFT HARDWARE
-%=========================================================================
-% A Transponder and Antenna are required by GMAT's simulator to model
-% the two-way measurement signal path (ground → spacecraft → ground).
-% The S-band turn-around ratio 880/749 is standard for LEO satellites.
+% =========================================================================
+% SECTION 2: SPACECRAFT HARDWARE
+% A Transponder and Antenna are required for the two-way measurement model.
+% S-band turn-around ratio 880/749 is standard for LEO satellites.
+% =========================================================================
 
 Create Antenna SatAnt;
 
 Create Transponder SatTransponder;
 SatTransponder.PrimaryAntenna  = SatAnt;
-SatTransponder.HardwareDelay   = 0.0;       % s  — ideal transponder
-SatTransponder.TurnAroundRatio = '880/749'; % S-band standard
+SatTransponder.HardwareDelay   = 0.0;
+SatTransponder.TurnAroundRatio = '880/749';
 
 Sat.AddHardware = {SatTransponder, SatAnt};
 
 
-%=========================================================================
-% SECTION 3 — GROUND STATION HARDWARE
-%=========================================================================
-% Each ground station requires a Transmitter, Receiver, and Antenna.
-% These are separate objects that GMAT links via PrimaryAntenna fields.
-% The Transmitter frequency (S-band uplink, 2090 MHz) is used by GMAT
-% internally; for the Range/RangeRate measurement type it does NOT appear
-% in the GMD file (unlike DSN_SeqRange which records frequency).
+% =========================================================================
+% SECTION 3: GROUND STATION HARDWARE
+% Each station needs a Transmitter, Receiver, and Antenna.
+% Frequency: S-band uplink at 2090 MHz.
+% =========================================================================
 
-Create Antenna GS1_Ant GS2_Ant;
+Create Antenna GS1_Ant;
+Create Antenna GS2_Ant;
 
-Create Transmitter GS1_Tx GS2_Tx;
+Create Transmitter GS1_Tx;
 GS1_Tx.PrimaryAntenna = GS1_Ant;
-GS1_Tx.Frequency      = 2090.0;   % MHz — S-band uplink
+GS1_Tx.Frequency      = 2090.0;
+
+Create Transmitter GS2_Tx;
 GS2_Tx.PrimaryAntenna = GS2_Ant;
 GS2_Tx.Frequency      = 2090.0;
 
-Create Receiver GS1_Rx GS2_Rx;
+Create Receiver GS1_Rx;
 GS1_Rx.PrimaryAntenna = GS1_Ant;
+
+Create Receiver GS2_Rx;
 GS2_Rx.PrimaryAntenna = GS2_Ant;
 
 
-%=========================================================================
-% SECTION 4 — GROUND STATIONS
-%=========================================================================
-% Geodetic coordinates (WGS84 ellipsoid reference, HorizonReference=Ellipsoid).
-% Location1 = latitude [deg N], Location2 = longitude [deg E], Location3 = altitude [km].
-%
-% Ground station IDs (integer strings) written to Col 3 of the GMD file.
-% The Python parser maps these IDs back to station names via a lookup table.
-%   Kiruna   → Id '1001'
-%   Svalbard → Id '1002'
+% =========================================================================
+% SECTION 4: GROUND STATIONS
+% StateType = Spherical with HorizonReference = Ellipsoid:
+%   Location1 = geodetic latitude  [deg N]
+%   Location2 = longitude          [deg E]
+%   Location3 = altitude           [km]
+% The Id field is written to column 3 of every GMD record.
+% =========================================================================
 
 Create GroundStation Kiruna;
 Kiruna.CentralBody           = Earth;
 Kiruna.StateType             = Spherical;
 Kiruna.HorizonReference      = Ellipsoid;
-Kiruna.Location1             = 67.86;    % deg N — geodetic latitude
-Kiruna.Location2             = 20.23;    % deg E — longitude
-Kiruna.Location3             = 0.04;     % km    — altitude (~40 m MSL)
-Kiruna.Id                    = '1001';   % numeric ID → written to .gmd
-Kiruna.MinimumElevationAngle = 5.0;      % deg — elevation mask
+Kiruna.Location1             = 67.86;
+Kiruna.Location2             = 20.23;
+Kiruna.Location3             = 0.04;
+Kiruna.Id                    = '1001';
+Kiruna.MinimumElevationAngle = 5.0;
 Kiruna.AddHardware           = {GS1_Tx, GS1_Rx, GS1_Ant};
 
 Create GroundStation Svalbard;
 Svalbard.CentralBody           = Earth;
 Svalbard.StateType             = Spherical;
 Svalbard.HorizonReference      = Ellipsoid;
-Svalbard.Location1             = 78.23;  % deg N
-Svalbard.Location2             = 15.40;  % deg E
-Svalbard.Location3             = 0.50;   % km (~500 m MSL)
+Svalbard.Location1             = 78.23;
+Svalbard.Location2             = 15.40;
+Svalbard.Location3             = 0.50;
 Svalbard.Id                    = '1002';
-Svalbard.MinimumElevationAngle = 5.0;    % deg
+Svalbard.MinimumElevationAngle = 5.0;
 Svalbard.AddHardware           = {GS2_Tx, GS2_Rx, GS2_Ant};
 
 
-%=========================================================================
-% SECTION 5 — FORCE MODEL (J2 only)
-%=========================================================================
-% J2 is the dominant perturbation for LEO (~1 km/day RAAN drift).
-% Using Degree=2, Order=0 activates only the J2 zonal harmonic.
-% No drag, no SRP, no third-body: intentionally consistent with the
-% Python BLS estimator force model.  Matching truth and estimator
-% dynamics isolates algorithm performance from force-model mismatch.
+% =========================================================================
+% SECTION 5: FORCE MODEL
+% J2 only: degree=2, order=0 activates only the J2 zonal harmonic.
+% No drag, no SRP. This matches the Python BLS force model exactly.
+% =========================================================================
 
 Create ForceModel FM_J2;
 FM_J2.CentralBody                      = Earth;
@@ -181,160 +149,126 @@ FM_J2.Drag.AtmosphereModel             = None;
 FM_J2.SRP                              = Off;
 
 
-%=========================================================================
-% SECTION 6 — PROPAGATOR
-%=========================================================================
-% RK89 with fixed 60-s step matches the ODE step used in Python.
-% Fixed step avoids interpolation artifacts in the STM propagation.
+% =========================================================================
+% SECTION 6: PROPAGATOR
+% Fixed 60-s step matches the Python ODE output cadence.
+% =========================================================================
 
 Create Propagator Prop_J2;
-Prop_J2.FM                = FM_J2;
-Prop_J2.Type              = RungeKutta89;
-Prop_J2.InitialStepSize   = 60;   % s
-Prop_J2.MinStep           = 60;
-Prop_J2.MaxStep           = 60;
-Prop_J2.MaxStepAttempts   = 50;
+Prop_J2.FM              = FM_J2;
+Prop_J2.Type            = RungeKutta89;
+Prop_J2.InitialStepSize = 60;
+Prop_J2.MinStep         = 60;
+Prop_J2.MaxStep         = 60;
+Prop_J2.MaxStepAttempts = 50;
 
 
-%=========================================================================
-% SECTION 7 — MEASUREMENT ERROR MODELS
-%=========================================================================
-% ErrorModel objects define the Gaussian noise added to each observation.
-% NoiseSigma is the 1-sigma standard deviation; Bias = 0 (zero-mean noise).
-%
-% Physical interpretation:
-%   Range sigma = 0.010 km = 10 m   → typical S-band radar (LEO)
-%   RangeRate sigma = 1e-6 km/s = 1 mm/s → coherent Doppler
-%
-% ErrorModel.Type must exactly match the measurement type keyword used
-% in TrackingData.AddTrackingConfig below.
+% =========================================================================
+% SECTION 7: MEASUREMENT ERROR MODELS
+% NoiseSigma is the 1-sigma Gaussian noise added to each observable.
+% Bias = 0: zero-mean noise (no systematic errors modelled).
+% ErrorModel.Type must match the keyword in AddTrackingConfig.
+% =========================================================================
 
 Create ErrorModel RangeError;
 RangeError.Type       = 'Range';
-RangeError.NoiseSigma = 0.010;       % km  (10 m 1-sigma)
+RangeError.NoiseSigma = 0.010;
 RangeError.Bias       = 0.0;
 
 Create ErrorModel RangeRateError;
 RangeRateError.Type       = 'RangeRate';
-RangeRateError.NoiseSigma = 0.000001;  % km/s  (1 mm/s 1-sigma)
+RangeRateError.NoiseSigma = 0.000001;
 RangeRateError.Bias       = 0.0;
 
-% Assign error models to each station.
-% Both stations share the same noise characteristics.
 Kiruna.ErrorModels   = {RangeError, RangeRateError};
 Svalbard.ErrorModels = {RangeError, RangeRateError};
 
 
-%=========================================================================
-% SECTION 8 — TRACKING FILE SET
-%=========================================================================
-% TrackingFileSet defines WHAT to measure (measurement type + strand) and
-% WHERE to write the output (.gmd file).
-%
-% A "tracking strand" is the signal path: {TX_station, Spacecraft, RX_station}.
+% =========================================================================
+% SECTION 8: TRACKING FILE SET
+% Defines what to measure and where to write the GMD file.
+% AddTrackingConfig format: {{TX_GS, SC, RX_GS}, 'MeasType'}
 % For two-way measurements TX and RX are the same ground station.
 %
-% AddTrackingConfig syntax:
-%   TrackingData.AddTrackingConfig = {{GS, SC, GS}, 'MeasType'};
-%
-% GMD record format for Range/RangeRate (written by GMAT):
+% GMD output record format (Range/RangeRate types):
 %   TAIMJD  Range      GS_ID  SC_ID  value_km
 %   TAIMJD  RangeRate  GS_ID  SC_ID  value_kms
 %
-% UseLightTime = True: GMAT corrects for the finite speed of light
-%   (adds 2*range/c latency, 20 ms for 3000 km range).
-%   The Python BLS estimator OMITS this correction (one-way approximation)
-%   which introduces a negligible systematic of ~10 m at LEO ranges.
-%   This is documented in the README and acceptable for a portfolio project.
-%   For operational OD, UseLightTime would need to be matched in Python.
+% UseLightTime = True: finite-speed-of-light correction applied (~20 ms
+%   for 3000 km range). The Python BLS omits this (negligible for LEO OD).
+% UseRelativityCorrection = False: no GR correction (not needed for LEO).
+% UseETminusTAI = False: no ET-TAI correction (deep space only).
+% =========================================================================
 
 Create TrackingFileSet TrackingData;
-TrackingData.FileName            = {'Batch_OD_Tracking.gmd'};
-
-% Kiruna tracking strands
-TrackingData.AddTrackingConfig   = {{Kiruna, Sat, Kiruna}, 'Range'};
-TrackingData.AddTrackingConfig   = {{Kiruna, Sat, Kiruna}, 'RangeRate'};
-
-% Svalbard tracking strands
-TrackingData.AddTrackingConfig   = {{Svalbard, Sat, Svalbard}, 'Range'};
-TrackingData.AddTrackingConfig   = {{Svalbard, Sat, Svalbard}, 'RangeRate'};
-
-TrackingData.UseLightTime        = True;   % finite-speed-of-light correction
-TrackingData.UseRelativity       = False;  % no relativistic correction (LEO)
-TrackingData.UseETminusTAI       = False;  % no ET-TAI (not needed for LEO)
+TrackingData.FileName                  = {'Batch_OD_Tracking.gmd'};
+TrackingData.AddTrackingConfig         = {{Kiruna, Sat, Kiruna}, 'Range'};
+TrackingData.AddTrackingConfig         = {{Kiruna, Sat, Kiruna}, 'RangeRate'};
+TrackingData.AddTrackingConfig         = {{Svalbard, Sat, Svalbard}, 'Range'};
+TrackingData.AddTrackingConfig         = {{Svalbard, Sat, Svalbard}, 'RangeRate'};
+TrackingData.UseLightTime              = True;
+TrackingData.UseRelativityCorrection   = False;
+TrackingData.UseETminusTAI             = False;
 
 
-%=========================================================================
-% SECTION 9 — SIMULATOR
-%=========================================================================
-% The Simulator propagates the spacecraft, evaluates the observation model
-% at each MeasurementTimeStep, checks the elevation mask for each strand,
-% and writes noisy measurements to the .gmd file.
-%
-% Key parameters:
-%   MeasurementTimeStep = 60 s  — one observation per minute (when visible)
-%   AddNoise = On               — Gaussian noise from each station's ErrorModel
-%   FinalEpoch = t0 + 3 days   — 3-day estimation arc
+% =========================================================================
+% SECTION 9: SIMULATOR
+% Propagates the spacecraft, evaluates the observation model at each step,
+% checks the elevation mask, and writes noisy measurements to the GMD file.
+% MeasurementTimeStep = 60 s: one observation per minute when visible.
+% AddNoise = On: Gaussian noise from each station ErrorModel is applied.
+% =========================================================================
 
 Create MeasurementSimulator Sim;
-Sim.AddData              = {TrackingData};
-Sim.EpochFormat          = UTCGregorian;
-Sim.InitialEpoch         = '01 Jan 2024 12:00:00.000';
-Sim.FinalEpoch           = '04 Jan 2024 12:00:00.000';  % 3-day arc
-Sim.MeasurementTimeStep  = 60;      % s — measurement cadence
-Sim.Propagator           = Prop_J2;
-Sim.AddNoise             = On;      % enable Gaussian white noise
+Sim.AddData             = {TrackingData};
+Sim.EpochFormat         = UTCGregorian;
+Sim.InitialEpoch        = '01 Jan 2024 12:00:00.000';
+Sim.FinalEpoch          = '04 Jan 2024 12:00:00.000';
+Sim.MeasurementTimeStep = 60;
+Sim.Propagator          = Prop_J2;
+Sim.AddNoise            = On;
 
 
-%=========================================================================
-% SECTION 10 — GROUND TRUTH REPORT
-%=========================================================================
-% Exports the true Cartesian ECI state at 60-s intervals.
-% This file is used by the Python BLS script to:
-%   (a) Extract the true initial state x_true for perturbation + comparison
-%   (b) Compute true position error after estimation
-%   (c) Validate post-fit residuals
-%
-% Time tag: A1ModJulian (continuous MJD in A1 time scale, no leap-second
-%           ambiguity).  Python converts to elapsed seconds from epoch.
-%
-% Precision: 12 significant digits (sub-mm position accuracy).
+% =========================================================================
+% SECTION 10: GROUND TRUTH REPORT
+% Exports the true ECI Cartesian state at 60-s intervals.
+% Used by the Python BLS to extract x_true and validate estimation error.
+% A1ModJulian: TAI-based Modified Julian Date (no leap-second ambiguity).
+% Python converts to elapsed seconds: t_s = (MJD - 60310.5) * 86400
+% Single-line Add field (no line continuation).
+% =========================================================================
 
 Create ReportFile GroundTruth;
 GroundTruth.Filename     = 'Batch_OD_GroundTruth.csv';
-GroundTruth.Add          = {Sat.A1ModJulian, ...
-                             Sat.X,  Sat.Y,  Sat.Z, ...
-                             Sat.VX, Sat.VY, Sat.VZ, ...
-                             Sat.SMA, Sat.ECC, Sat.INC, ...
-                             Sat.RAAN, Sat.AOP, Sat.TA};
+GroundTruth.Add          = {Sat.A1ModJulian, Sat.X, Sat.Y, Sat.Z, Sat.VX, Sat.VY, Sat.VZ, Sat.SMA, Sat.ECC, Sat.INC, Sat.RAAN, Sat.AOP, Sat.TA};
 GroundTruth.WriteHeaders = On;
 GroundTruth.Delimiter    = ',';
 GroundTruth.ColumnWidth  = 20;
 GroundTruth.Precision    = 12;
 
 
-%=========================================================================
-% SECTION 11 — MISSION SEQUENCE
-%=========================================================================
-% Step 1: RunSimulator
-%   GMAT internally propagates the spacecraft with FM_J2, evaluates the
-%   observation model (Range + RangeRate) at each 60-s step for each
-%   ground station that sees the satellite above 5-deg elevation,
-%   adds Gaussian noise, and writes records to Batch_OD_Tracking.gmd.
-%   The spacecraft state is automatically reset to epoch after this step.
+% =========================================================================
+% SECTION 11: MISSION SEQUENCE
+% All Create statements must appear above BeginMissionSequence.
 %
-% Step 2: Reset + Propagate
-%   The spacecraft state is explicitly reset to the initial Keplerian
-%   elements to ensure the ground truth report starts from the same
-%   epoch and state as the simulator. The 3-day propagation writes one
-%   CSV row every 60 s (4321 rows total).
+% Step 1: RunSimulator
+%   GMAT propagates the orbit internally, evaluates Range and RangeRate
+%   for each ground station pass (elevation above 5 deg mask), adds
+%   Gaussian noise, and writes records to Batch_OD_Tracking.gmd.
+%
+% Step 2: Reset state
+%   Explicit reset to the initial Keplerian elements ensures the
+%   ground truth report starts from exactly the same state as the
+%   simulator.
+%
+% Step 3: Propagate and write ground truth
+%   One CSV row written every 60 s over the 3-day arc (4321 rows).
+% =========================================================================
 
 BeginMissionSequence;
 
-% ── Step 1: generate simulated tracking observations ──────────────────
 RunSimulator Sim;
 
-% ── Reset spacecraft to initial conditions ────────────────────────────
 Sat.Epoch = '01 Jan 2024 12:00:00.000';
 Sat.SMA   = 7078.14;
 Sat.ECC   = 0.001;
@@ -343,7 +277,6 @@ Sat.RAAN  = 0.0;
 Sat.AOP   = 0.0;
 Sat.TA    = 0.0;
 
-% ── Step 2: propagate truth and write ground truth report ─────────────
 Toggle GroundTruth On;
 Propagate Prop_J2(Sat) {Sat.ElapsedDays = 3.0};
 Toggle GroundTruth Off;
